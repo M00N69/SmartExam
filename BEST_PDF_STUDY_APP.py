@@ -1,15 +1,10 @@
+import re
+import json
 import streamlit as st
 from groq import Groq
 import dotenv
-import os
-import json
 from PyPDF2 import PdfReader
-from PIL import Image
-from io import BytesIO
-import pandas as pd
 from fpdf import FPDF
-import base64
-import re
 
 # Configuration de la page Streamlit
 st.set_page_config(page_title="Créateur d'Examens Intelligents", page_icon="📝")
@@ -17,17 +12,10 @@ st.set_page_config(page_title="Créateur d'Examens Intelligents", page_icon="�
 # Chargement des variables d'environnement
 dotenv.load_dotenv()
 
-# Structure de st.secrets pour Groq
-# Vous devez ajouter ceci dans le fichier .streamlit/secrets.toml :
-# [secrets]
-# GROQ_API_KEY = "votre_clé_api_groq"
-
-# Fonction pour initialiser le client Groq
 def get_groq_client():
     """Initialise et renvoie un client Groq avec la clé API."""
     return Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-# Fonction pour interroger le modèle Groq
 def interroger_modele_groq(messages, model_params):
     client = get_groq_client()
     response = client.chat.completions.create(
@@ -36,48 +24,19 @@ def interroger_modele_groq(messages, model_params):
     )
     return response.choices[0].message.content
 
-# Fonction pour extraire le texte d'un PDF
-def extraire_texte_du_pdf(fichier_pdf):
-    lecteur_pdf = PdfReader(fichier_pdf)
-    texte = ""
-    for page in lecteur_pdf.pages:
-        texte += page.extract_text() + "\n"
-    return texte
-
-# Fonction pour résumer un texte avec Groq
-def resumer_texte(texte):
-    prompt = "Veuillez résumer le texte suivant de manière concise et précise :\n\n" + texte
-    messages = [
-        {"role": "user", "content": prompt},
-    ]
-    resume = interroger_modele_groq(messages, model_params={"model": "llama-3.1-70b-versatile"})
-    return resume
-
-# Fonction pour découper un texte en morceaux plus petits
-def decouper_texte(texte, max_tokens=3000):
-    phrases = texte.split('. ')
-    morceaux = []
-    morceau = ""
-    for phrase in phrases:
-        if len(morceau) + len(phrase) > max_tokens:
-            morceaux.append(morceau)
-            morceau = phrase + ". "
-        else:
-            morceau += phrase + ". "
-    if morceau:
-        morceaux.append(morceau)
-    return morceaux
-
-# Fonction pour nettoyer et analyser les questions générées
 def nettoyer_reponse_json(reponse):
-    """Nettoie la réponse JSON en remplaçant les caractères d'échappement incorrects."""
-    # Remplacer les échappements incorrects
+    """Nettoie la réponse JSON en corrigeant les erreurs d'échappement et en ajoutant les délimiteurs manquants."""
+    # Corrige les échappements incorrects
     corrected_text = re.sub(r'\\(?!["\\/bfnrt])', r'\\\\', reponse)
+    
+    # Vérifie la présence de toutes les paires de crochets
+    if corrected_text.count('[') > corrected_text.count(']'):
+        corrected_text += ']'
     return corrected_text
 
 def analyser_questions_generees(reponse):
     try:
-        # Nettoyer la réponse pour corriger les échappements incorrects
+        # Nettoyer la réponse
         reponse = nettoyer_reponse_json(reponse)
         
         # Trouver la partie JSON dans la réponse
@@ -93,11 +52,39 @@ def analyser_questions_generees(reponse):
         st.text(reponse)
         return None
 
-# Fonction pour générer des questions à choix multiples
+def extraire_texte_du_pdf(fichier_pdf):
+    lecteur_pdf = PdfReader(fichier_pdf)
+    texte = ""
+    for page in lecteur_pdf.pages:
+        texte += page.extract_text() + "\n"
+    return texte
+
+def resumer_texte(texte):
+    prompt = "Veuillez résumer le texte suivant de manière concise et précise en français :\n\n" + texte
+    messages = [
+        {"role": "user", "content": prompt},
+    ]
+    resume = interroger_modele_groq(messages, model_params={"model": "llama-3.1-70b-versatile"})
+    return resume
+
+def decouper_texte(texte, max_tokens=3000):
+    phrases = texte.split('. ')
+    morceaux = []
+    morceau = ""
+    for phrase in phrases:
+        if len(morceau) + len(phrase) > max_tokens:
+            morceaux.append(morceau)
+            morceau = phrase + ". "
+        else:
+            morceau += phrase + ". "
+    if morceau:
+        morceaux.append(morceau)
+    return morceaux
+
 def generer_questions_qcm(contenu_texte):
     prompt = (
         "Vous êtes un professeur dans le domaine de la Biologie des Systèmes Computationnels. "
-        "En vous basant sur le document PDF fourni, créez un examen de niveau Master composé de questions à choix multiples. "
+        "En vous basant sur le document PDF fourni, créez un examen de niveau Master composé de questions à choix multiples en français. "
         "L'examen doit inclure 30 questions réalistes couvrant l'ensemble du contenu. Fournissez les résultats au format JSON structuré comme suit : "
         "[{'question': '...', 'choices': ['...'], 'correct_answer': '...', 'explanation': '...'}, ...]. Assurez-vous que le JSON soit valide et bien formaté."
     )
@@ -108,18 +95,15 @@ def generer_questions_qcm(contenu_texte):
     reponse = interroger_modele_groq(messages, model_params={"model": "mixtral-8x7b-32768"})
     return reponse
 
-# Fonction pour obtenir une question spécifique
 def obtenir_question(index, questions):
     return questions[index]
 
-# Fonction pour initialiser l'état de session
 def initialiser_etat_session(questions):
     session_state = st.session_state
     session_state.indice_question_courante = 0
     session_state.donnees_quiz = obtenir_question(session_state.indice_question_courante, questions)
     session_state.reponses_correctes = 0
 
-# Classe pour générer un PDF
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 12)
@@ -135,7 +119,6 @@ class PDF(FPDF):
         self.multi_cell(0, 10, corps)
         self.ln()
 
-# Fonction pour générer un PDF contenant les questions
 def generer_pdf(questions):
     pdf = PDF()
     pdf.add_page()
@@ -155,7 +138,6 @@ def generer_pdf(questions):
 
     return pdf.output(dest="S").encode("latin1")
 
-# Fonction principale de l'application
 def main():
     if 'mode_app' not in st.session_state:
         st.session_state.mode_app = "Télécharger PDF & Générer Questions"
@@ -201,7 +183,6 @@ def main():
     elif st.session_state.mode_app == "Télécharger en PDF":
         application_telechargement_pdf_quiz()
 
-# Fonction pour l'application de téléchargement et génération de PDF
 def application_telechargement_pdf():
 
     st.title("Téléchargez votre cours - Créez votre examen")
@@ -240,7 +221,6 @@ def application_telechargement_pdf():
     else:
         st.warning("Veuillez télécharger un PDF pour générer l'examen interactif.")
 
-# Fonction pour soumettre une réponse
 def soumettre_reponse(i, donnees_quiz):
     choix_utilisateur = st.session_state[f"choix_utilisateur_{i}"]
     st.session_state.reponses[i] = choix_utilisateur
@@ -250,7 +230,6 @@ def soumettre_reponse(i, donnees_quiz):
     else:
         st.session_state.feedback[i] = ("Incorrect", donnees_quiz.get('explanation', 'Aucune explication disponible'), donnees_quiz['correct_answer'])
 
-# Fonction pour l'application de quiz
 def application_quiz_qcm():
     st.title('Quiz à Choix Multiples')
     st.subheader('Il y a toujours une bonne réponse par question')
@@ -287,7 +266,6 @@ def application_quiz_qcm():
                 </div>
             """, unsafe_allow_html=True)
 
-# Fonction pour l'application de téléchargement de PDF
 def application_telechargement_pdf_quiz():
     st.title('Téléchargez votre examen en PDF')
 

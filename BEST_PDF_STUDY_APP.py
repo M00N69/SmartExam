@@ -1,5 +1,5 @@
 import streamlit as st
-from openai import OpenAI
+from groq import Groq
 import dotenv
 import os
 import json
@@ -10,297 +10,293 @@ import pandas as pd
 from fpdf import FPDF
 import base64
 
-#this is the potential part for the upcoming paywall
+# Configuration de la page Streamlit
+st.set_page_config(page_title="Créateur d'Examens Intelligents", page_icon="📝")
 
-
-st.set_page_config(page_title="SmartExam Creator", page_icon="📝")
-
+# Chargement des variables d'environnement
 dotenv.load_dotenv()
 
-# Load your OpenAI API key from the environment variable
-# OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")   Use this when taking the env variables
+# Structure de st.secrets pour Groq
+# Vous devez ajouter ceci dans le fichier .streamlit/secrets.toml :
+# [secrets]
+# GROQ_API_KEY = "votre_clé_api_groq"
 
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]  #And this secrets, when using streamlit
+# Fonction pour initialiser le client Groq
+def get_groq_client():
+    """Initialise et renvoie un client Groq avec la clé API."""
+    return Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-openai_models = [
-    "gpt-4o-mini",
-    "gpt-4-turbo",
-    "gpt-3.5-turbo-16k",
-]
-
-# Function to query and stream the response from the LLM
-def stream_llm_response(messages, model_params, api_key=OPENAI_API_KEY):
-    client = OpenAI(api_key=api_key)
+# Fonction pour interroger le modèle Groq
+def interroger_modele_groq(messages, model_params):
+    client = get_groq_client()
     response = client.chat.completions.create(
-        model=model_params["model"] if "model" in model_params else "gpt-4o",
         messages=messages,
-        temperature=model_params["temperature"] if "temperature" in model_params else 0.3,
-        max_tokens=4096,
+        model=model_params["model"] if "model" in model_params else "mixtral-8x7b-32768"
     )
     return response.choices[0].message.content
 
-def extract_text_from_pdf(pdf_file):
-    pdf_reader = PdfReader(pdf_file)
-    text = ""
-    for page in pdf_reader.pages:
-        text += page.extract_text() + "\n"
-    return text
+# Fonction pour extraire le texte d'un PDF
+def extraire_texte_du_pdf(fichier_pdf):
+    lecteur_pdf = PdfReader(fichier_pdf)
+    texte = ""
+    for page in lecteur_pdf.pages:
+        texte += page.extract_text() + "\n"
+    return texte
 
-def summarize_text(text, api_key=OPENAI_API_KEY):
-    prompt = (
-        "Please summarize the following text to be concise and to the point:\n\n" + text
-    )
+# Fonction pour résumer un texte avec Groq
+def resumer_texte(texte):
+    prompt = "Veuillez résumer le texte suivant de manière concise et précise :\n\n" + texte
     messages = [
         {"role": "user", "content": prompt},
     ]
-    summary = stream_llm_response(messages, model_params={"model": "gpt-4o-mini", "temperature": 0.3}, api_key=api_key)
-    return summary
+    resume = interroger_modele_groq(messages, model_params={"model": "mixtral-8x7b-32768"})
+    return resume
 
-def chunk_text(text, max_tokens=3000):
-    sentences = text.split('. ')
-    chunks = []
-    chunk = ""
-    for sentence in sentences:
-        if len(chunk) + len(sentence) > max_tokens:
-            chunks.append(chunk)
-            chunk = sentence + ". "
+# Fonction pour découper un texte en morceaux plus petits
+def decouper_texte(texte, max_tokens=3000):
+    phrases = texte.split('. ')
+    morceaux = []
+    morceau = ""
+    for phrase in phrases:
+        if len(morceau) + len(phrase) > max_tokens:
+            morceaux.append(morceau)
+            morceau = phrase + ". "
         else:
-            chunk += sentence + ". "
-    if chunk:
-        chunks.append(chunk)
-    return chunks
+            morceau += phrase + ". "
+    if morceau:
+        morceaux.append(morceau)
+    return morceaux
 
-def generate_mc_questions(content_text, api_key=OPENAI_API_KEY):
+# Fonction pour générer des questions à choix multiples
+def generer_questions_qcm(contenu_texte):
     prompt = (
-        "You are a professor in the field of Computational System Biology and should create an exam on the topic of the Input PDF. "
-        "Using the attached lecture slides (please analyze thoroughly), create a Master-level multiple-choice exam. The exam should contain multiple-choice and single-choice questions, "
-        "appropriately marked so that students know how many options to select. Create 30 realistic exam questions covering the entire content. Provide the output in JSON format. "
-        "The JSON should have the structure: [{'question': '...', 'choices': ['...'], 'correct_answer': '...', 'explanation': '...'}, ...]. Ensure the JSON is valid and properly formatted."
+        "Vous êtes un professeur dans le domaine de la Biologie des Systèmes Computationnels. "
+        "En vous basant sur le document PDF fourni, créez un examen de niveau Master composé de questions à choix multiples. "
+        "L'examen doit inclure 30 questions réalistes couvrant l'ensemble du contenu. Fournissez les résultats au format JSON structuré comme suit : "
+        "[{'question': '...', 'choices': ['...'], 'correct_answer': '...', 'explanation': '...'}, ...]. Assurez-vous que le JSON soit valide et bien formaté."
     )
     messages = [
-        {"role": "user", "content": content_text},
+        {"role": "user", "content": contenu_texte},
         {"role": "user", "content": prompt},
     ]
-    response = stream_llm_response(messages, model_params={"model": "gpt-4o-mini", "temperature": 0.3}, api_key=api_key)
-    return response
+    reponse = interroger_modele_groq(messages, model_params={"model": "mixtral-8x7b-32768"})
+    return reponse
 
-def parse_generated_questions(response):
+# Fonction pour analyser les questions générées
+def analyser_questions_generees(reponse):
     try:
-        # Find the JSON part within the response string
-        json_start = response.find('[')
-        json_end = response.rfind(']') + 1
-        json_str = response[json_start:json_end]
+        debut_json = reponse.find('[')
+        fin_json = reponse.rfind(']') + 1
+        json_str = reponse[debut_json:fin_json]
 
         questions = json.loads(json_str)
         return questions
     except json.JSONDecodeError as e:
-        st.error(f"JSON parsing error: {e}")
-        st.error("Response from OpenAI:")
-        st.text(response)
+        st.error(f"Erreur de parsing JSON : {e}")
+        st.error("Réponse de Groq :")
+        st.text(reponse)
         return None
 
-def get_question(index, questions):
+# Fonction pour obtenir une question spécifique
+def obtenir_question(index, questions):
     return questions[index]
 
-def initialize_session_state(questions):
+# Fonction pour initialiser l'état de session
+def initialiser_etat_session(questions):
     session_state = st.session_state
-    session_state.current_question_index = 0
-    session_state.quiz_data = get_question(session_state.current_question_index, questions)
-    session_state.correct_answers = 0
+    session_state.indice_question_courante = 0
+    session_state.donnees_quiz = obtenir_question(session_state.indice_question_courante, questions)
+    session_state.reponses_correctes = 0
 
+# Classe pour générer un PDF
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 12)
-        self.cell(0, 10, 'Generated Exam', 0, 1, 'C')
+        self.cell(0, 10, 'Examen Généré', 0, 1, 'C')
 
-    def chapter_title(self, title):
+    def titre_chapitre(self, titre):
         self.set_font('Arial', 'B', 12)
-        self.multi_cell(0, 10, title)
+        self.multi_cell(0, 10, titre)
         self.ln(5)
 
-    def chapter_body(self, body):
+    def corps_chapitre(self, corps):
         self.set_font('Arial', '', 12)
-        self.multi_cell(0, 10, body)
+        self.multi_cell(0, 10, corps)
         self.ln()
 
-def generate_pdf(questions):
+# Fonction pour générer un PDF contenant les questions
+def generer_pdf(questions):
     pdf = PDF()
     pdf.add_page()
     
     for i, q in enumerate(questions):
         question = f"Q{i+1}: {q['question']}"
-        pdf.chapter_title(question)
+        pdf.titre_chapitre(question)
         
-        choices = "\n".join(q['choices'])
-        pdf.chapter_body(choices)
+        choix = "\n".join(q['choices'])
+        pdf.corps_chapitre(choix)
         
-        correct_answer = f"Correct answer: {q['correct_answer']}"
-        pdf.chapter_body(correct_answer)
+        reponse_correcte = f"Réponse correcte : {q['correct_answer']}"
+        pdf.corps_chapitre(reponse_correcte)
         
-        explanation = f"Explanation: {q['explanation']}"
-        pdf.chapter_body(explanation)
+        explication = f"Explication : {q['explanation']}"
+        pdf.corps_chapitre(explication)
 
     return pdf.output(dest="S").encode("latin1")
 
+# Fonction principale de l'application
 def main():
-    if 'app_mode' not in st.session_state:
-        st.session_state.app_mode = "Upload PDF & Generate Questions"
+    if 'mode_app' not in st.session_state:
+        st.session_state.mode_app = "Télécharger PDF & Générer Questions"
         
-    st.sidebar.title("SmartExam Creator")
+    st.sidebar.title("Créateur d'Examens Intelligents")
     
-    app_mode_options = ["Upload PDF & Generate Questions", "Take the Quiz", "Download as PDF"]
-    st.session_state.app_mode = st.sidebar.selectbox("Choose the app mode", app_mode_options, index=app_mode_options.index(st.session_state.app_mode))
+    options_mode_app = ["Télécharger PDF & Générer Questions", "Passer le Quiz", "Télécharger en PDF"]
+    st.session_state.mode_app = st.sidebar.selectbox("Choisissez le mode de l'application", options_mode_app, index=options_mode_app.index(st.session_state.mode_app))
     
-    st.sidebar.markdown("## About")
+    st.sidebar.markdown("## À Propos")
     st.sidebar.video("https://youtu.be/zE3ToJLLSIY")
     st.sidebar.info(
         """
-        **SmartExam Creator** is an innovative tool designed to help students and educators alike. 
-        Upload your lecture notes or handwritten notes to create personalized multiple-choice exams.
+        **Créateur d'Examens Intelligents** est un outil innovant conçu pour aider les étudiants et les éducateurs. 
+        Téléchargez vos notes de cours ou notes manuscrites pour créer des examens à choix multiples personnalisés.
         
-        **Story:**
-        This app was developed with the vision of making exam preparation easier and more interactive for students. 
-        Leveraging the power new AI models, it aims to transform traditional study methods into a more engaging and 
-        efficient process. Whether you're a student looking to test your knowledge or an educator seeking to create 
-        customized exams, SmartExam Creator is here to help.
+        **Histoire :**
+        Cette application a été développée dans le but de rendre la préparation aux examens plus facile et interactive pour les étudiants. 
+        En tirant parti des nouveaux modèles d'IA, elle vise à transformer les méthodes d'étude traditionnelles en un processus plus engageant et 
+        efficace. Que vous soyez un étudiant souhaitant tester vos connaissances ou un éducateur cherchant à créer des examens sur mesure, 
+        le Créateur d'Examens Intelligents est là pour vous aider.
 
-        **What makes SmartExam special ?**
-        Apart from other platforms that require costly subscriptions, this platform is designed from a STEM student
-        for all other students, but let us be honest, we do not have money for Subscriptions. That is why it is completely free for now.
-        I have designed the app as cost efficient as possible, so I can cover all business costs that are coming.  
-        
-        **Features:**
-        - Upload PDF documents
-        - Generate multiple-choice questions
-        - Take interactive quizzes
-        - Download generated exams as PDF
+        **Fonctionnalités :**
+        - Télécharger des documents PDF
+        - Générer des questions à choix multiples
+        - Passer des quiz interactifs
+        - Télécharger les examens générés en PDF
 
-        Built with ❤️ using OpenAI's GPT-4o-mini.
-
-        **Connect with me on [LinkedIn](https://www.linkedin.com/in/laurin-herbst/).**
+        Construit avec ❤️ en utilisant le modèle Groq Mixtral.
         """
     )
     
     
-    if st.session_state.app_mode == "Upload PDF & Generate Questions":
-        pdf_upload_app()
-    elif st.session_state.app_mode == "Take the Quiz":
-        if 'mc_test_generated' in st.session_state and st.session_state.mc_test_generated:
-            if 'generated_questions' in st.session_state and st.session_state.generated_questions:
-                mc_quiz_app()
+    if st.session_state.mode_app == "Télécharger PDF & Générer Questions":
+        application_telechargement_pdf()
+    elif st.session_state.mode_app == "Passer le Quiz":
+        if 'quiz_genere' in st.session_state and st.session_state.quiz_genere:
+            if 'questions_generees' in st.session_state and st.session_state.questions_generees:
+                application_quiz_qcm()
             else:
-                st.warning("No generated questions found. Please upload a PDF and generate questions first.")
+                st.warning("Aucune question générée trouvée. Veuillez d'abord télécharger un PDF et générer des questions.")
         else:
-            st.warning("Please upload a PDF and generate questions first.")
-    elif st.session_state.app_mode == "Download as PDF":
-        download_pdf_app()
+            st.warning("Veuillez d'abord télécharger un PDF et générer des questions.")
+    elif st.session_state.mode_app == "Télécharger en PDF":
+        application_telechargement_pdf_quiz()
 
-def pdf_upload_app():
+# Fonction pour l'application de téléchargement et génération de PDF
+def application_telechargement_pdf():
 
-    st.title("Upload Your Lecture - Create Your Test Exam")
-    st.subheader("Show Us the Slides and We do the Rest")
+    st.title("Téléchargez votre cours - Créez votre examen")
+    st.subheader("Montrez-nous les diapositives et nous faisons le reste")
 
-    content_text = ""
+    contenu_texte = ""
     
-    # Initialize session state for messages
     if 'messages' not in st.session_state:
         st.session_state.messages = []
     
-    # PDF Upload
-    uploaded_pdf = st.file_uploader("Upload a PDF document", type=["pdf"])
-    if uploaded_pdf:
-        pdf_text = extract_text_from_pdf(uploaded_pdf)
-        content_text += pdf_text
-        st.success("PDF content added to the session.")
+    fichier_pdf_telecharge = st.file_uploader("Téléchargez un document PDF", type=["pdf"])
+    if fichier_pdf_telecharge:
+        texte_pdf = extraire_texte_du_pdf(fichier_pdf_telecharge)
+        contenu_texte += texte_pdf
+        st.success("Contenu du PDF ajouté à la session.")
     
-    if len(content_text) > 3000:  # Check if the content text is too large
-        content_text = summarize_text(content_text)  # Summarize if too large
+    if len(contenu_texte) > 3000:
+        contenu_texte = resumer_texte(contenu_texte)
 
-    if content_text:
-        st.info("Generating the exam from the uploaded content. It will take just a minute...")
-        chunks = chunk_text(content_text)  # Chunk the text if necessary
+    if contenu_texte:
+        st.info("Génération de l'examen à partir du contenu téléchargé. Cela prendra une minute...")
+        morceaux = decouper_texte(contenu_texte)
         questions = []
-        for chunk in chunks:
-            response = generate_mc_questions(chunk)
-            parsed_questions = parse_generated_questions(response)
-            if parsed_questions:
-                questions.extend(parsed_questions)
+        for morceau in morceaux:
+            reponse = generer_questions_qcm(morceau)
+            questions_parsees = analyser_questions_generees(reponse)
+            if questions_parsees:
+                questions.extend(questions_parsees)
         if questions:
-            st.session_state.generated_questions = questions
-            st.session_state.content_text = content_text
-            st.session_state.mc_test_generated = True
-            st.success("The game has been successfully created!")
+            st.session_state.questions_generees = questions
+            st.session_state.contenu_texte = contenu_texte
+            st.session_state.quiz_genere = True
+            st.success("L'examen a été généré avec succès!")
         else:
-            st.error("Failed to parse the generated questions. Please check the OpenAI response.")
+            st.error("Échec de l'analyse des questions générées. Veuillez vérifier la réponse de Groq.")
     else:
-        st.warning("Please upload a PDF to generate the interactive exam.")
+        st.warning("Veuillez télécharger un PDF pour générer l'examen interactif.")
 
-def submit_answer(i, quiz_data):
-    user_choice = st.session_state[f"user_choice_{i}"]
-    st.session_state.answers[i] = user_choice
-    if user_choice == quiz_data['correct_answer']:
-        st.session_state.feedback[i] = ("Correct", quiz_data.get('explanation', 'No explanation available'))
-        st.session_state.correct_answers += 1
+# Fonction pour soumettre une réponse
+def soumettre_reponse(i, donnees_quiz):
+    choix_utilisateur = st.session_state[f"choix_utilisateur_{i}"]
+    st.session_state.reponses[i] = choix_utilisateur
+    if choix_utilisateur == donnees_quiz['correct_answer']:
+        st.session_state.feedback[i] = ("Correct", donnees_quiz.get('explanation', 'Aucune explication disponible'))
+        st.session_state.reponses_correctes += 1
     else:
-        st.session_state.feedback[i] = ("Incorrect", quiz_data.get('explanation', 'No explanation available'), quiz_data['correct_answer'])
+        st.session_state.feedback[i] = ("Incorrect", donnees_quiz.get('explanation', 'Aucune explication disponible'), donnees_quiz['correct_answer'])
 
-def mc_quiz_app():
-    st.title('Multiple Choice Game')
-    st.subheader('Here is always one correct answer per question')
+# Fonction pour l'application de quiz
+def application_quiz_qcm():
+    st.title('Quiz à Choix Multiples')
+    st.subheader('Il y a toujours une bonne réponse par question')
 
-    questions = st.session_state.generated_questions
+    questions = st.session_state.questions_generees
 
-    if questions:  # Ensure questions list is not empty
-        if 'answers' not in st.session_state:
-            st.session_state.answers = [None] * len(questions)
+    if questions:  # S'assurer que la liste de questions n'est pas vide
+        if 'reponses' not in st.session_state:
+            st.session_state.reponses = [None] * len(questions)
             st.session_state.feedback = [None] * len(questions)
-            st.session_state.correct_answers = 0
+            st.session_state.reponses_correctes = 0
 
-        for i, quiz_data in enumerate(questions):
-            st.markdown(f"### Question {i+1}: {quiz_data['question']}")
+        for i, donnees_quiz in enumerate(questions):
+            st.markdown(f"### Question {i+1} : {donnees_quiz['question']}")
 
-            if st.session_state.answers[i] is None:
-                user_choice = st.radio("Choose an answer:", quiz_data['choices'], key=f"user_choice_{i}")
-                st.button(f"Submit your answer {i+1}", key=f"submit_{i}", on_click=submit_answer, args=(i, quiz_data))
+            if st.session_state.reponses[i] is None:
+                choix_utilisateur = st.radio("Choisissez une réponse :", donnees_quiz['choices'], key=f"choix_utilisateur_{i}")
+                st.button(f"Soumettez votre réponse {i+1}", key=f"submit_{i}", on_click=soumettre_reponse, args=(i, donnees_quiz))
             else:
-                st.radio("Choose an answer:", quiz_data['choices'], key=f"user_choice_{i}", index=quiz_data['choices'].index(st.session_state.answers[i]), disabled=True)
+                st.radio("Choisissez une réponse :", donnees_quiz['choices'], key=f"choix_utilisateur_{i}", index=donnees_quiz['choices'].index(st.session_state.reponses[i]), disabled=True)
                 if st.session_state.feedback[i][0] == "Correct":
                     st.success(st.session_state.feedback[i][0])
                 else:
-                    st.error(f"{st.session_state.feedback[i][0]} - Correct answer: {st.session_state.feedback[i][2]}")
-                st.markdown(f"Explanation: {st.session_state.feedback[i][1]}")
+                    st.error(f"{st.session_state.feedback[i][0]} - Réponse correcte : {st.session_state.feedback[i][2]}")
+                st.markdown(f"Explication : {st.session_state.feedback[i][1]}")
 
-        if all(answer is not None for answer in st.session_state.answers):
-            score = st.session_state.correct_answers
+        if all(reponse is not None for reponse in st.session_state.reponses):
+            score = st.session_state.reponses_correctes
             total_questions = len(questions)
             st.write(f"""
                 <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;">
                     <h1 style="font-size: 3em; color: gold;">🏆</h1>
-                    <h1>Your Score: {score}/{total_questions}</h1>
+                    <h1>Votre Score : {score}/{total_questions}</h1>
                 </div>
             """, unsafe_allow_html=True)
 
+# Fonction pour l'application de téléchargement de PDF
+def application_telechargement_pdf_quiz():
+    st.title('Téléchargez votre examen en PDF')
 
-
-def download_pdf_app():
-    st.title('Download Your Exam as PDF')
-
-    questions = st.session_state.generated_questions
+    questions = st.session_state.questions_generees
 
     if questions:
         for i, q in enumerate(questions):
-            st.markdown(f"### Q{i+1}: {q['question']}")
-            for choice in q['choices']:
-                st.write(choice)
-            st.write(f"**Correct answer:** {q['correct_answer']}")
-            st.write(f"**Explanation:** {q['explanation']}")
-            st.write("---")  # Separator line
+            st.markdown(f"### Q{i+1} : {q['question']}")
+            for choix in q['choices']:
+                st.write(choix)
+            st.write(f"**Réponse correcte :** {q['correct_answer']}")
+            st.write(f"**Explication :** {q['explanation']}")
+            st.write("---")  # Ligne de séparation
 
-        pdf_bytes = generate_pdf(questions)
+        pdf_bytes = generer_pdf(questions)
         st.download_button(
-            label="Download PDF",
+            label="Télécharger le PDF",
             data=pdf_bytes,
-            file_name="generated_exam.pdf",
+            file_name="examen_genere.pdf",
             mime="application/pdf"
         )
 

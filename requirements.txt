@@ -40,7 +40,6 @@ matplotlib-inline==0.1.7
 mdurl==0.1.2
 nest-asyncio==1.6.0
 numpy==2.0.1
-openai==1.37.1
 packaging==24.1
 pandas==2.2.2
 parso==0.8.4
@@ -86,4 +85,5 @@ tzdata==2024.1
 urllib3==2.2.2
 watchdog==4.0.1
 wcwidth==0.2.13
-groq  # Replace with the correct package name if different
+groq 
+

@@ -49,7 +49,7 @@ def resumer_texte(texte):
     messages = [
         {"role": "user", "content": prompt},
     ]
-    resume = interroger_modele_groq(messages, model_params={"model": "mixtral-8x7b-32768"})
+    resume = interroger_modele_groq(messages, model_params={"model": "llama-3.1-70b-versatile"})
     return resume
 
 # Fonction pour découper un texte en morceaux plus petits

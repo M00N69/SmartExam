@@ -31,7 +31,7 @@ def interroger_modele_groq(messages, model_params):
     client = get_groq_client()
     response = client.chat.completions.create(
         messages=messages,
-        model=model_params["model"] if "model" in model_params else "mixtral-8x7b-32768"
+        model=model_params["model"] if "model" in model_params else "llama-3.1-70b-versatile"
     )
     return response.choices[0].message.content
 

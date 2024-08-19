@@ -9,6 +9,7 @@ from io import BytesIO
 import pandas as pd
 from fpdf import FPDF
 import base64
+import re
 
 # Configuration de la page Streamlit
 st.set_page_config(page_title="Créateur d'Examens Intelligents", page_icon="📝")
@@ -67,6 +68,31 @@ def decouper_texte(texte, max_tokens=3000):
         morceaux.append(morceau)
     return morceaux
 
+# Fonction pour nettoyer et analyser les questions générées
+def nettoyer_reponse_json(reponse):
+    """Nettoie la réponse JSON en remplaçant les caractères d'échappement incorrects."""
+    # Remplacer les échappements incorrects
+    corrected_text = re.sub(r'\\(?!["\\/bfnrt])', r'\\\\', reponse)
+    return corrected_text
+
+def analyser_questions_generees(reponse):
+    try:
+        # Nettoyer la réponse pour corriger les échappements incorrects
+        reponse = nettoyer_reponse_json(reponse)
+        
+        # Trouver la partie JSON dans la réponse
+        debut_json = reponse.find('[')
+        fin_json = reponse.rfind(']') + 1
+        json_str = reponse[debut_json:fin_json]
+
+        questions = json.loads(json_str)
+        return questions
+    except json.JSONDecodeError as e:
+        st.error(f"Erreur de parsing JSON : {e}")
+        st.error("Réponse de Groq :")
+        st.text(reponse)
+        return None
+
 # Fonction pour générer des questions à choix multiples
 def generer_questions_qcm(contenu_texte):
     prompt = (
@@ -81,21 +107,6 @@ def generer_questions_qcm(contenu_texte):
     ]
     reponse = interroger_modele_groq(messages, model_params={"model": "mixtral-8x7b-32768"})
     return reponse
-
-# Fonction pour analyser les questions générées
-def analyser_questions_generees(reponse):
-    try:
-        debut_json = reponse.find('[')
-        fin_json = reponse.rfind(']') + 1
-        json_str = reponse[debut_json:fin_json]
-
-        questions = json.loads(json_str)
-        return questions
-    except json.JSONDecodeError as e:
-        st.error(f"Erreur de parsing JSON : {e}")
-        st.error("Réponse de Groq :")
-        st.text(reponse)
-        return None
 
 # Fonction pour obtenir une question spécifique
 def obtenir_question(index, questions):
@@ -176,7 +187,6 @@ def main():
         Construit avec ❤️ en utilisant le modèle Groq Mixtral.
         """
     )
-    
     
     if st.session_state.mode_app == "Télécharger PDF & Générer Questions":
         application_telechargement_pdf()
